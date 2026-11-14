@@ -35,16 +35,12 @@ const BASE = "https://files.murabbie.org/fsdownload/";
 const PACK = BASE + "e4hWIOI7a/books.pack";
 const INDEX_URL = BASE + "Ox50e9gb7/index.json";
 const INDEX_SHA = "9b9e7a97000be5045d324022f0804ee0a28aee556efc0a22dce2f174a18fc3c2";
-const PACK_SIZE = 8931755475;
 const TESTS = [
   { id: 9452,  offset: 1411418367, length: 3222,   sha256: "beb88f299a7bd3dbc694a633678faaff160dbf7b6840793f77651ec5f2e82e94" },
   { id: 10618, offset: 2423554403, length: 249947, sha256: "5b7768253646713d6035bea6bfd63fab34dceecc8ed7dfa000071665799a3e7d" }
 ];
 const VARIANTS = [
-  { name: "افتراضي", headers: {} },
-  { name: "Accept: */*", headers: { "Accept": "*/*" } },
-  { name: "Accept: octet-stream", headers: { "Accept": "application/octet-stream" } },
-  { name: "User-Agent خاص بالتطبيق", headers: { "User-Agent": "ShamelaLibrary/0.1 (Android)", "Accept": "*/*" } }
+  { name: "Accept: */*", headers: { "Accept": "*/*" } }
 ];
 const out = document.getElementById("out");
 const logBox = document.getElementById("log");
@@ -108,7 +104,7 @@ async function findWorkingHeaders() {
       const r = await req(INDEX_URL, v.headers);
       const ok = (await sha256(r.body)) === INDEX_SHA;
       say(v.name + ": " + brief(r) + " | SHA256 " + (ok ? "يطابق" : "لا يطابق"), ok ? "ok" : "warn");
-      if (ok) return v;
+      if (ok) return { v, body: r.body };
       if (r.body.length < 200000 && r.body[0] === 0x3c) {
         const txt = new TextDecoder().decode(r.body).replace(/\s+/g, " ");
         const m = txt.match(/<title>([^<]*)<\/title>/i);
@@ -118,16 +114,15 @@ async function findWorkingHeaders() {
   }
   return null;
 }
-async function testHead(v) {
-  say("— 2) ترويسات books.pack بطلب HEAD");
+async function testRangeOnIndex(v, full) {
+  say("— 2) اختبار Range على index.json (ملف صغير معروف المحتوى)");
   try {
-    const r = await req(PACK, v.headers, "HEAD");
-    say(brief(r), r.status === 200 ? "ok" : "warn");
-    const len = Number(hget(r.headers, "content-length"));
-    say(len === PACK_SIZE ? "حجم الحزمة يطابق الـ Manifest." : "حجم الحزمة لا يطابق: " + len, len === PACK_SIZE ? "ok" : "warn");
-    const ranges = hget(r.headers, "accept-ranges").toLowerCase().includes("bytes");
-    if (!ranges || len !== PACK_SIZE) { say("لم يثبت دعم Range؛ أوقفت الاختبار حتى لا يُنزَّل الملف الكبير.", "bad"); return false; }
-    return true;
+    const r = await req(INDEX_URL, Object.assign({}, v.headers, { Range: "bytes=1000-1099" }));
+    say(brief(r), r.status === 206 ? "ok" : "bad");
+    if (r.status !== 206 || r.body.length !== 100) { say("Range لا يعمل بالشكل المتوقع؛ أوقفت الاختبار قبل لمس الحزمة الكبيرة.", "bad"); return false; }
+    const same = hex(r.body) === hex(full.slice(1000, 1100));
+    say(same ? "الجزء المستلم يطابق نفس الموضع من الملف الكامل." : "الجزء المستلم لا يطابق الملف الكامل.", same ? "ok" : "bad");
+    return same;
   } catch (e) { say("فشل: " + e.message, "bad"); return false; }
 }
 async function testBook(t, v) {
@@ -156,11 +151,11 @@ document.getElementById("run").onclick = async (ev) => {
   out.innerHTML = ""; lines = [];
   const native = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
   say("تطبيق أصلي: " + (native ? "نعم" : "لا") + " | فك gzip مدعوم: " + (typeof DecompressionStream !== "undefined" ? "نعم" : "لا"), native ? "ok" : "warn");
-  const v = await findWorkingHeaders();
-  if (!v) {
+  const found = await findWorkingHeaders();
+  if (!found) {
     say("لم تنجح أي ترويسة في جلب الملف الحقيقي. الخادم يعيد صفحة غير متوقعة لهذه الطلبات.", "bad");
-  } else if (await testHead(v)) {
-    for (const t of TESTS) { if (!(await testBook(t, v))) break; }
+  } else if (await testRangeOnIndex(found.v, found.body)) {
+    for (const t of TESTS) { if (!(await testBook(t, found.v))) break; }
   }
   say("انتهى الاختبار.");
   ev.target.disabled = false;
