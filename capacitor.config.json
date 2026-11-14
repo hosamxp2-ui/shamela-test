@@ -1,0 +1,10 @@
+{
+  "appId": "app.shamelatest.diag",
+  "appName": "اختبار الشاملة",
+  "webDir": "www",
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    }
+  }
+}

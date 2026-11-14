@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>اختبار الشاملة</title>
+<style>
+  :root { --bg:#f6f7f4; --ink:#1d2a24; --card:#fff; --line:#cfd8d1; --ok:#1b7a4b; --bad:#b3261e; --warn:#9a6700; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14201a; --ink:#e6efe9; --card:#1c2b23; --line:#34493d; --ok:#5fd39a; --bad:#ff8a80; --warn:#f0c15a; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:16px; padding-top:calc(16px + env(safe-area-inset-top, 0px)); background:var(--bg); color:var(--ink); font-family:system-ui,sans-serif; line-height:1.7; }
+  main { max-width:640px; margin:0 auto; }
+  h1 { font-size:1.3rem; margin:0 0 4px; }
+  button { font:inherit; padding:12px 18px; border:0; border-radius:10px; background:var(--ink); color:var(--bg); width:100%; margin:12px 0 6px; }
+  button:disabled { opacity:.5; }
+  button.alt { background:transparent; color:var(--ink); border:1px solid var(--line); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:10px 14px; margin:8px 0; white-space:pre-wrap; word-break:break-word; }
+  .ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--warn); }
+  textarea { width:100%; min-height:200px; direction:ltr; text-align:left; font:12px/1.5 ui-monospace,monospace; background:var(--card); color:var(--ink); border:1px solid var(--line); border-radius:10px; padding:8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>اختبار الشاملة (تطبيق أصلي)</h1>
+  <p>يجرّب قراءة الخادم من التطبيق نفسه. لا يُنزَّل الملف الكبير: كتابان صغيران فقط.</p>
+  <button id="run">ابدأ الاختبار</button>
+  <div id="out"></div>
+  <button id="copy" class="alt" disabled>نسخ النتيجة</button>
+  <textarea id="log" readonly placeholder="ستظهر النتيجة هنا"></textarea>
+</main>
+<script>
+const BASE = "https://files.murabbie.org/fsdownload/";
+const PACK = BASE + "e4hWIOI7a/books.pack";
+const INDEX_URL = BASE + "Ox50e9gb7/index.json";
+const INDEX_SHA = "9b9e7a97000be5045d324022f0804ee0a28aee556efc0a22dce2f174a18fc3c2";
+const PACK_SIZE = 8931755475;
+const TESTS = [
+  { id: 9452,  offset: 1411418367, length: 3222,   sha256: "beb88f299a7bd3dbc694a633678faaff160dbf7b6840793f77651ec5f2e82e94" },
+  { id: 10618, offset: 2423554403, length: 249947, sha256: "5b7768253646713d6035bea6bfd63fab34dceecc8ed7dfa000071665799a3e7d" }
+];
+const out = document.getElementById("out");
+const logBox = document.getElementById("log");
+let lines = [];
+
+function say(text, cls) {
+  lines.push(text);
+  logBox.value = lines.join("\n");
+  const d = document.createElement("div");
+  d.className = "card " + (cls || "");
+  d.textContent = text;
+  out.appendChild(d);
+}
+const hex = (u8) => Array.from(u8).map(b => b.toString(16).padStart(2, "0")).join("");
+async function sha256(buf) { return hex(new Uint8Array(await crypto.subtle.digest("SHA-256", buf))); }
+function withTimeout(p, ms) {
+  return Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error("انتهت المهلة (" + ms / 1000 + " ثانية)")), ms))]);
+}
+function magic(u8) {
+  if (u8[0] === 0x1f && u8[1] === 0x8b) return "gzip";
+  if (u8[0] === 0x28 && u8[1] === 0xb5 && u8[2] === 0x2f && u8[3] === 0xfd) return "zstd";
+  if (u8[0] === 0x78 && [0x01, 0x5e, 0x9c, 0xda].includes(u8[1])) return "zlib";
+  if (String.fromCharCode(...u8.slice(0, 15)) === "SQLite format 3") return "SQLite (غير مضغوط)";
+  if (u8[0] === 0x50 && u8[1] === 0x4b) return "zip";
+  return "غير معروف";
+}
+async function gunzip(buf) {
+  const stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+const hdrs = (r) =>
+  "Accept-Ranges: " + (r.headers.get("accept-ranges") || "غير ظاهر") +
+  " | Content-Range: " + (r.headers.get("content-range") || "غير ظاهر") +
+  " | Content-Length: " + (r.headers.get("content-length") || "غير ظاهر") +
+  " | Content-Type: " + (r.headers.get("content-type") || "غير ظاهر");
+
+async function testIndex() {
+  say("— 1) قراءة index.json كاملًا (1.7MB) والتحقق من SHA256");
+  try {
+    const t0 = Date.now();
+    const r = await withTimeout(fetch(INDEX_URL), 90000);
+    const buf = await r.arrayBuffer();
+    say("الرمز " + r.status + " | الحجم " + buf.byteLength + " بايت | " + (Date.now() - t0) + " مللي ثانية", r.ok ? "ok" : "bad");
+    const h = await sha256(buf);
+    say(h === INDEX_SHA ? "SHA256 يطابق الـ Manifest." : "SHA256 لا يطابق الـ Manifest.", h === INDEX_SHA ? "ok" : "bad");
+    return r.ok;
+  } catch (e) {
+    say("فشل: " + e.message, "bad");
+    return false;
+  }
+}
+async function testHead() {
+  say("— 2) فحص ترويسات books.pack بطلب HEAD (بدون تنزيل)");
+  try {
+    const r = await withTimeout(fetch(PACK, { method: "HEAD" }), 30000);
+    say("الرمز " + r.status + (r.redirected ? " (بعد تحويل)" : ""), r.ok ? "ok" : "warn");
+    say(hdrs(r));
+    const len = Number(r.headers.get("content-length"));
+    const ranges = (r.headers.get("accept-ranges") || "").toLowerCase().includes("bytes");
+    if (len) say(len === PACK_SIZE ? "حجم الحزمة يطابق الـ Manifest." : "حجم الحزمة لا يطابق (" + len + ").", len === PACK_SIZE ? "ok" : "warn");
+    if (!ranges) {
+      say("الخادم لا يعلن دعم Range. أوقفت الاختبار هنا حتى لا يبدأ التطبيق بتنزيل 8.9GB.", "bad");
+      return false;
+    }
+    return true;
+  } catch (e) {
+    say("فشل: " + e.message + "\nأوقفت الاختبار حتى لا يُنزَّل الملف الكبير بالخطأ.", "bad");
+    return false;
+  }
+}
+async function testBook(t) {
+  say("— كتاب رقم " + t.id + " (المتوقع " + t.length + " بايت)");
+  let r;
+  try {
+    r = await withTimeout(fetch(PACK, { headers: { Range: "bytes=" + t.offset + "-" + (t.offset + t.length - 1) } }), 60000);
+  } catch (e) {
+    say("فشل الاتصال: " + e.message, "bad");
+    return false;
+  }
+  say("الرمز: " + r.status, r.status === 206 ? "ok" : "bad");
+  say(hdrs(r));
+  if (r.status !== 206) { say("لم يرجع الخادم جزءًا من الملف.", "bad"); return false; }
+  const buf = await r.arrayBuffer();
+  const u8 = new Uint8Array(buf);
+  say("وصل " + u8.length + " بايت", u8.length === t.length ? "ok" : "bad");
+  say("أول 16 بايت: " + hex(u8.slice(0, 16)) + " | الصيغة: " + magic(u8));
+  const h1 = await sha256(buf);
+  say(h1 === t.sha256 ? "SHA256 يطابق الفهرس (على المحتوى المخزن)." : "SHA256 لا يطابق على المخزن، أجرب بعد فك الضغط.", h1 === t.sha256 ? "ok" : "warn");
+  if (magic(u8) === "gzip") {
+    try {
+      const raw = await gunzip(buf);
+      say("بعد فك gzip: " + raw.length + " بايت | الصيغة: " + magic(raw), "ok");
+      const h2 = await sha256(raw);
+      say(h2 === t.sha256 ? "SHA256 يطابق بعد فك الضغط." : "SHA256 لا يطابق بعد فك الضغط.", h2 === t.sha256 ? "ok" : "bad");
+    } catch (e) { say("تعذر فك gzip: " + e.message, "bad"); }
+  } else if (magic(u8) === "zstd") {
+    say("الصيغة zstd: المتصفح لا يفكها وحده، وسنحتاج مكتبة لها.", "warn");
+  }
+  return true;
+}
+
+document.getElementById("run").onclick = async (ev) => {
+  ev.target.disabled = true;
+  out.innerHTML = ""; lines = [];
+  const native = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+  say("تطبيق أصلي: " + (native ? "نعم" : "لا (الصفحة مفتوحة في متصفح)"), native ? "ok" : "warn");
+  say("الأصل: " + location.origin + " | فك gzip مدعوم: " + (typeof DecompressionStream !== "undefined" ? "نعم" : "لا"));
+  if (await testIndex()) {
+    if (await testHead()) {
+      for (const t of TESTS) { if (!(await testBook(t))) break; }
+    }
+  }
+  say("انتهى الاختبار.");
+  ev.target.disabled = false;
+  document.getElementById("copy").disabled = false;
+};
+document.getElementById("copy").onclick = async () => {
+  try { await navigator.clipboard.writeText(logBox.value); }
+  catch (e) { logBox.select(); document.execCommand("copy"); }
+};
+</script>
+</body>
+</html>
