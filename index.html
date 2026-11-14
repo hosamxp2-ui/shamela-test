@@ -39,8 +39,13 @@ const TESTS = [
   { id: 9452,  offset: 1411418367, length: 3222,   sha256: "beb88f299a7bd3dbc694a633678faaff160dbf7b6840793f77651ec5f2e82e94" },
   { id: 10618, offset: 2423554403, length: 249947, sha256: "5b7768253646713d6035bea6bfd63fab34dceecc8ed7dfa000071665799a3e7d" }
 ];
-const VARIANTS = [
-  { name: "Accept: */*", headers: { "Accept": "*/*" } }
+const ATTEMPTS = [
+  { name: "محاولة 1 (افتراضي)", headers: {} },
+  { name: "محاولة 2 (افتراضي)", headers: {} },
+  { name: "محاولة 3 (Accept: */*)", headers: { "Accept": "*/*" } },
+  { name: "محاولة 4 (Accept: */*)", headers: { "Accept": "*/*" } },
+  { name: "محاولة 5 (Accept: */*)", headers: { "Accept": "*/*" } },
+  { name: "محاولة 6 (Accept: */*)", headers: { "Accept": "*/*" } }
 ];
 const out = document.getElementById("out");
 const logBox = document.getElementById("log");
@@ -97,20 +102,26 @@ function brief(r) {
     " | Content-Range: " + (hget(r.headers, "content-range") || "غير ظاهر");
 }
 
+function cookieNames(h) {
+  const v = hget(h, "set-cookie");
+  if (!v) return "لا";
+  const names = []; const re = /(?:^|,\s*)([^=;,\s]+)=/g; let m;
+  while ((m = re.exec(String(v)))) names.push(m[1]);
+  return names.join("، ") || "نعم";
+}
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 async function findWorkingHeaders() {
-  say("— 1) قراءة index.json بإضافة CapacitorHttp مباشرة (جرّب عدة ترويسات)");
-  for (const v of VARIANTS) {
+  say("— 1) قراءة index.json عدة مرات متتالية (لمعرفة هل النتيجة تتغير بين المحاولات)");
+  for (const v of ATTEMPTS) {
     try {
       const r = await req(INDEX_URL, v.headers);
       const ok = (await sha256(r.body)) === INDEX_SHA;
-      say(v.name + ": " + brief(r) + " | SHA256 " + (ok ? "يطابق" : "لا يطابق"), ok ? "ok" : "warn");
+      say(v.name + ": " + brief(r) + " | SHA256 " + (ok ? "يطابق" : "لا يطابق") +
+          " | ملفات تعريف الارتباط: " + cookieNames(r.headers) +
+          (hget(r.headers, "location") ? " | تحويل إلى: " + hget(r.headers, "location") : ""), ok ? "ok" : "warn");
       if (ok) return { v, body: r.body };
-      if (r.body.length < 200000 && r.body[0] === 0x3c) {
-        const txt = new TextDecoder().decode(r.body).replace(/\s+/g, " ");
-        const m = txt.match(/<title>([^<]*)<\/title>/i);
-        say("عنوان الصفحة المستلمة: " + (m ? m[1].replace(/&nbsp;/g, " ") : "غير موجود"));
-      }
     } catch (e) { say(v.name + ": فشل (" + e.message + ")", "bad"); }
+    await sleep(1500);
   }
   return null;
 }
@@ -153,7 +164,7 @@ document.getElementById("run").onclick = async (ev) => {
   say("تطبيق أصلي: " + (native ? "نعم" : "لا") + " | فك gzip مدعوم: " + (typeof DecompressionStream !== "undefined" ? "نعم" : "لا"), native ? "ok" : "warn");
   const found = await findWorkingHeaders();
   if (!found) {
-    say("لم تنجح أي ترويسة في جلب الملف الحقيقي. الخادم يعيد صفحة غير متوقعة لهذه الطلبات.", "bad");
+    say("لم تنجح أي محاولة في جلب الملف الحقيقي.", "bad");
   } else if (await testRangeOnIndex(found.v, found.body)) {
     for (const t of TESTS) { if (!(await testBook(t, found.v))) break; }
   }
