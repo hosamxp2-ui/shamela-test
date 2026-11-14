@@ -69,6 +69,14 @@ async function gunzip(buf) {
   const stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"));
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
+function allHeaders(r) {
+  try { return Array.from(r.headers.entries()).map(([k, v]) => k + ": " + v).join("\n") || "(لا ترويسات)"; }
+  catch (e) { return "(تعذّر قراءة الترويسات)"; }
+}
+function preview(u8, n) {
+  const txt = new TextDecoder("utf-8", { fatal: false }).decode(u8.slice(0, n || 1500));
+  return txt.replace(/\s+/g, " ").trim();
+}
 const hdrs = (r) =>
   "Accept-Ranges: " + (r.headers.get("accept-ranges") || "غير ظاهر") +
   " | Content-Range: " + (r.headers.get("content-range") || "غير ظاهر") +
@@ -84,7 +92,12 @@ async function testIndex() {
     say("الرمز " + r.status + " | الحجم " + buf.byteLength + " بايت | " + (Date.now() - t0) + " مللي ثانية", r.ok ? "ok" : "bad");
     const h = await sha256(buf);
     say(h === INDEX_SHA ? "SHA256 يطابق الـ Manifest." : "SHA256 لا يطابق الـ Manifest.", h === INDEX_SHA ? "ok" : "bad");
-    return r.ok;
+    if (h !== INDEX_SHA) {
+      say("الرابط النهائي: " + (r.url || "غير ظاهر") + (r.redirected ? " (بعد تحويل)" : ""));
+      say("كل الترويسات:\n" + allHeaders(r));
+      say("بداية المحتوى المستلم:\n" + preview(new Uint8Array(buf), 1500), "warn");
+    }
+    return h === INDEX_SHA;
   } catch (e) {
     say("فشل: " + e.message, "bad");
     return false;
@@ -96,6 +109,7 @@ async function testHead() {
     const r = await withTimeout(fetch(PACK, { method: "HEAD" }), 30000);
     say("الرمز " + r.status + (r.redirected ? " (بعد تحويل)" : ""), r.ok ? "ok" : "warn");
     say(hdrs(r));
+    say("كل الترويسات:\n" + allHeaders(r));
     const len = Number(r.headers.get("content-length"));
     const ranges = (r.headers.get("accept-ranges") || "").toLowerCase().includes("bytes");
     if (len) say(len === PACK_SIZE ? "حجم الحزمة يطابق الـ Manifest." : "حجم الحزمة لا يطابق (" + len + ").", len === PACK_SIZE ? "ok" : "warn");
@@ -146,10 +160,12 @@ document.getElementById("run").onclick = async (ev) => {
   const native = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
   say("تطبيق أصلي: " + (native ? "نعم" : "لا (الصفحة مفتوحة في متصفح)"), native ? "ok" : "warn");
   say("الأصل: " + location.origin + " | فك gzip مدعوم: " + (typeof DecompressionStream !== "undefined" ? "نعم" : "لا"));
-  if (await testIndex()) {
-    if (await testHead()) {
-      for (const t of TESTS) { if (!(await testBook(t))) break; }
-    }
+  const indexOk = await testIndex();
+  const headOk = await testHead();
+  if (indexOk && headOk) {
+    for (const t of TESTS) { if (!(await testBook(t))) break; }
+  } else {
+    say("توقف اختبار الكتب لأن الخادم لا يعيد الملفات المتوقعة.", "bad");
   }
   say("انتهى الاختبار.");
   ev.target.disabled = false;
