@@ -40,6 +40,12 @@ const TESTS = [
   { id: 9452,  offset: 1411418367, length: 3222,   sha256: "beb88f299a7bd3dbc694a633678faaff160dbf7b6840793f77651ec5f2e82e94" },
   { id: 10618, offset: 2423554403, length: 249947, sha256: "5b7768253646713d6035bea6bfd63fab34dceecc8ed7dfa000071665799a3e7d" }
 ];
+const VARIANTS = [
+  { name: "افتراضي", headers: {} },
+  { name: "Accept: */*", headers: { "Accept": "*/*" } },
+  { name: "Accept: octet-stream", headers: { "Accept": "application/octet-stream" } },
+  { name: "User-Agent خاص بالتطبيق", headers: { "User-Agent": "ShamelaLibrary/0.1 (Android)", "Accept": "*/*" } }
+];
 const out = document.getElementById("out");
 const logBox = document.getElementById("log");
 let lines = [];
@@ -53,119 +59,108 @@ function say(text, cls) {
   out.appendChild(d);
 }
 const hex = (u8) => Array.from(u8).map(b => b.toString(16).padStart(2, "0")).join("");
-async function sha256(buf) { return hex(new Uint8Array(await crypto.subtle.digest("SHA-256", buf))); }
-function withTimeout(p, ms) {
-  return Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error("انتهت المهلة (" + ms / 1000 + " ثانية)")), ms))]);
+async function sha256(u8) { return hex(new Uint8Array(await crypto.subtle.digest("SHA-256", u8))); }
+function b64ToU8(b64) {
+  const bin = atob(b64); const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return u8;
+}
+function hget(headers, name) {
+  const k = Object.keys(headers || {}).find(x => x.toLowerCase() === name.toLowerCase());
+  return k ? headers[k] : "";
 }
 function magic(u8) {
   if (u8[0] === 0x1f && u8[1] === 0x8b) return "gzip";
   if (u8[0] === 0x28 && u8[1] === 0xb5 && u8[2] === 0x2f && u8[3] === 0xfd) return "zstd";
   if (u8[0] === 0x78 && [0x01, 0x5e, 0x9c, 0xda].includes(u8[1])) return "zlib";
   if (String.fromCharCode(...u8.slice(0, 15)) === "SQLite format 3") return "SQLite (غير مضغوط)";
-  if (u8[0] === 0x50 && u8[1] === 0x4b) return "zip";
+  if (u8[0] === 0x3c) return "نص HTML/XML (ليس ملفًا)";
   return "غير معروف";
 }
-async function gunzip(buf) {
-  const stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"));
+async function gunzip(u8) {
+  const stream = new Blob([u8]).stream().pipeThrough(new DecompressionStream("gzip"));
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
-function allHeaders(r) {
-  try { return Array.from(r.headers.entries()).map(([k, v]) => k + ": " + v).join("\n") || "(لا ترويسات)"; }
-  catch (e) { return "(تعذّر قراءة الترويسات)"; }
+function plugin() {
+  const P = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp;
+  if (!P) throw new Error("إضافة CapacitorHttp غير متاحة");
+  return P;
 }
-function preview(u8, n) {
-  const txt = new TextDecoder("utf-8", { fatal: false }).decode(u8.slice(0, n || 1500));
-  return txt.replace(/\s+/g, " ").trim();
+async function req(url, headers, method) {
+  const res = await plugin().request({
+    url, method: method || "GET", headers: headers || {},
+    responseType: method === "HEAD" ? "text" : "blob",
+    connectTimeout: 30000, readTimeout: 60000
+  });
+  const u8 = method === "HEAD" ? new Uint8Array(0) : b64ToU8(res.data || "");
+  return { status: res.status, headers: res.headers || {}, body: u8 };
 }
-const hdrs = (r) =>
-  "Accept-Ranges: " + (r.headers.get("accept-ranges") || "غير ظاهر") +
-  " | Content-Range: " + (r.headers.get("content-range") || "غير ظاهر") +
-  " | Content-Length: " + (r.headers.get("content-length") || "غير ظاهر") +
-  " | Content-Type: " + (r.headers.get("content-type") || "غير ظاهر");
+function brief(r) {
+  return "الرمز " + r.status + " | النوع " + (hget(r.headers, "content-type") || "؟") + " | الحجم " + r.body.length +
+    " | Accept-Ranges: " + (hget(r.headers, "accept-ranges") || "غير ظاهر") +
+    " | Content-Range: " + (hget(r.headers, "content-range") || "غير ظاهر");
+}
 
-async function testIndex() {
-  say("— 1) قراءة index.json كاملًا (1.7MB) والتحقق من SHA256");
-  try {
-    const t0 = Date.now();
-    const r = await withTimeout(fetch(INDEX_URL), 90000);
-    const buf = await r.arrayBuffer();
-    say("الرمز " + r.status + " | الحجم " + buf.byteLength + " بايت | " + (Date.now() - t0) + " مللي ثانية", r.ok ? "ok" : "bad");
-    const h = await sha256(buf);
-    say(h === INDEX_SHA ? "SHA256 يطابق الـ Manifest." : "SHA256 لا يطابق الـ Manifest.", h === INDEX_SHA ? "ok" : "bad");
-    if (h !== INDEX_SHA) {
-      say("الرابط النهائي: " + (r.url || "غير ظاهر") + (r.redirected ? " (بعد تحويل)" : ""));
-      say("كل الترويسات:\n" + allHeaders(r));
-      say("بداية المحتوى المستلم:\n" + preview(new Uint8Array(buf), 1500), "warn");
-    }
-    return h === INDEX_SHA;
-  } catch (e) {
-    say("فشل: " + e.message, "bad");
-    return false;
-  }
-}
-async function testHead() {
-  say("— 2) فحص ترويسات books.pack بطلب HEAD (بدون تنزيل)");
-  try {
-    const r = await withTimeout(fetch(PACK, { method: "HEAD" }), 30000);
-    say("الرمز " + r.status + (r.redirected ? " (بعد تحويل)" : ""), r.ok ? "ok" : "warn");
-    say(hdrs(r));
-    say("كل الترويسات:\n" + allHeaders(r));
-    const len = Number(r.headers.get("content-length"));
-    const ranges = (r.headers.get("accept-ranges") || "").toLowerCase().includes("bytes");
-    if (len) say(len === PACK_SIZE ? "حجم الحزمة يطابق الـ Manifest." : "حجم الحزمة لا يطابق (" + len + ").", len === PACK_SIZE ? "ok" : "warn");
-    if (!ranges) {
-      say("الخادم لا يعلن دعم Range. أوقفت الاختبار هنا حتى لا يبدأ التطبيق بتنزيل 8.9GB.", "bad");
-      return false;
-    }
-    return true;
-  } catch (e) {
-    say("فشل: " + e.message + "\nأوقفت الاختبار حتى لا يُنزَّل الملف الكبير بالخطأ.", "bad");
-    return false;
-  }
-}
-async function testBook(t) {
-  say("— كتاب رقم " + t.id + " (المتوقع " + t.length + " بايت)");
-  let r;
-  try {
-    r = await withTimeout(fetch(PACK, { headers: { Range: "bytes=" + t.offset + "-" + (t.offset + t.length - 1) } }), 60000);
-  } catch (e) {
-    say("فشل الاتصال: " + e.message, "bad");
-    return false;
-  }
-  say("الرمز: " + r.status, r.status === 206 ? "ok" : "bad");
-  say(hdrs(r));
-  if (r.status !== 206) { say("لم يرجع الخادم جزءًا من الملف.", "bad"); return false; }
-  const buf = await r.arrayBuffer();
-  const u8 = new Uint8Array(buf);
-  say("وصل " + u8.length + " بايت", u8.length === t.length ? "ok" : "bad");
-  say("أول 16 بايت: " + hex(u8.slice(0, 16)) + " | الصيغة: " + magic(u8));
-  const h1 = await sha256(buf);
-  say(h1 === t.sha256 ? "SHA256 يطابق الفهرس (على المحتوى المخزن)." : "SHA256 لا يطابق على المخزن، أجرب بعد فك الضغط.", h1 === t.sha256 ? "ok" : "warn");
-  if (magic(u8) === "gzip") {
+async function findWorkingHeaders() {
+  say("— 1) قراءة index.json بإضافة CapacitorHttp مباشرة (جرّب عدة ترويسات)");
+  for (const v of VARIANTS) {
     try {
-      const raw = await gunzip(buf);
+      const r = await req(INDEX_URL, v.headers);
+      const ok = (await sha256(r.body)) === INDEX_SHA;
+      say(v.name + ": " + brief(r) + " | SHA256 " + (ok ? "يطابق" : "لا يطابق"), ok ? "ok" : "warn");
+      if (ok) return v;
+      if (r.body.length < 200000 && r.body[0] === 0x3c) {
+        const txt = new TextDecoder().decode(r.body).replace(/\s+/g, " ");
+        const m = txt.match(/<title>([^<]*)<\/title>/i);
+        say("عنوان الصفحة المستلمة: " + (m ? m[1].replace(/&nbsp;/g, " ") : "غير موجود"));
+      }
+    } catch (e) { say(v.name + ": فشل (" + e.message + ")", "bad"); }
+  }
+  return null;
+}
+async function testHead(v) {
+  say("— 2) ترويسات books.pack بطلب HEAD");
+  try {
+    const r = await req(PACK, v.headers, "HEAD");
+    say(brief(r), r.status === 200 ? "ok" : "warn");
+    const len = Number(hget(r.headers, "content-length"));
+    say(len === PACK_SIZE ? "حجم الحزمة يطابق الـ Manifest." : "حجم الحزمة لا يطابق: " + len, len === PACK_SIZE ? "ok" : "warn");
+    const ranges = hget(r.headers, "accept-ranges").toLowerCase().includes("bytes");
+    if (!ranges || len !== PACK_SIZE) { say("لم يثبت دعم Range؛ أوقفت الاختبار حتى لا يُنزَّل الملف الكبير.", "bad"); return false; }
+    return true;
+  } catch (e) { say("فشل: " + e.message, "bad"); return false; }
+}
+async function testBook(t, v) {
+  say("— كتاب رقم " + t.id + " (المتوقع " + t.length + " بايت)");
+  try {
+    const r = await req(PACK, Object.assign({}, v.headers, { Range: "bytes=" + t.offset + "-" + (t.offset + t.length - 1) }));
+    say(brief(r), r.status === 206 ? "ok" : "bad");
+    if (r.status !== 206 || r.body.length !== t.length) { say("لم يصل الجزء المطلوب.", "bad"); return false; }
+    say("أول 16 بايت: " + hex(r.body.slice(0, 16)) + " | الصيغة: " + magic(r.body));
+    const h1 = await sha256(r.body);
+    say(h1 === t.sha256 ? "SHA256 يطابق الفهرس (على المحتوى المخزن)." : "SHA256 لا يطابق على المخزن.", h1 === t.sha256 ? "ok" : "warn");
+    if (magic(r.body) === "gzip") {
+      const raw = await gunzip(r.body);
       say("بعد فك gzip: " + raw.length + " بايت | الصيغة: " + magic(raw), "ok");
       const h2 = await sha256(raw);
       say(h2 === t.sha256 ? "SHA256 يطابق بعد فك الضغط." : "SHA256 لا يطابق بعد فك الضغط.", h2 === t.sha256 ? "ok" : "bad");
-    } catch (e) { say("تعذر فك gzip: " + e.message, "bad"); }
-  } else if (magic(u8) === "zstd") {
-    say("الصيغة zstd: المتصفح لا يفكها وحده، وسنحتاج مكتبة لها.", "warn");
-  }
-  return true;
+    } else if (magic(r.body) === "zstd") {
+      say("الصيغة zstd: سنحتاج مكتبة لفكها.", "warn");
+    }
+    return true;
+  } catch (e) { say("فشل: " + e.message, "bad"); return false; }
 }
 
 document.getElementById("run").onclick = async (ev) => {
   ev.target.disabled = true;
   out.innerHTML = ""; lines = [];
   const native = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-  say("تطبيق أصلي: " + (native ? "نعم" : "لا (الصفحة مفتوحة في متصفح)"), native ? "ok" : "warn");
-  say("الأصل: " + location.origin + " | فك gzip مدعوم: " + (typeof DecompressionStream !== "undefined" ? "نعم" : "لا"));
-  const indexOk = await testIndex();
-  const headOk = await testHead();
-  if (indexOk && headOk) {
-    for (const t of TESTS) { if (!(await testBook(t))) break; }
-  } else {
-    say("توقف اختبار الكتب لأن الخادم لا يعيد الملفات المتوقعة.", "bad");
+  say("تطبيق أصلي: " + (native ? "نعم" : "لا") + " | فك gzip مدعوم: " + (typeof DecompressionStream !== "undefined" ? "نعم" : "لا"), native ? "ok" : "warn");
+  const v = await findWorkingHeaders();
+  if (!v) {
+    say("لم تنجح أي ترويسة في جلب الملف الحقيقي. الخادم يعيد صفحة غير متوقعة لهذه الطلبات.", "bad");
+  } else if (await testHead(v)) {
+    for (const t of TESTS) { if (!(await testBook(t, v))) break; }
   }
   say("انتهى الاختبار.");
   ev.target.disabled = false;
