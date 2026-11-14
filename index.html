@@ -34,19 +34,13 @@
 const BASE = "https://files.murabbie.org/fsdownload/";
 const PACK = BASE + "e4hWIOI7a/books.pack";
 const INDEX_URL = BASE + "Ox50e9gb7/index.json";
+const PACK_SIZE = 8931755475;
 const INDEX_SHA = "9b9e7a97000be5045d324022f0804ee0a28aee556efc0a22dce2f174a18fc3c2";
 const TESTS = [
   { id: 9452,  offset: 1411418367, length: 3222,   sha256: "beb88f299a7bd3dbc694a633678faaff160dbf7b6840793f77651ec5f2e82e94" },
   { id: 10618, offset: 2423554403, length: 249947, sha256: "5b7768253646713d6035bea6bfd63fab34dceecc8ed7dfa000071665799a3e7d" }
 ];
-const ATTEMPTS = [
-  { name: "محاولة 1 (افتراضي)", headers: {} },
-  { name: "محاولة 2 (افتراضي)", headers: {} },
-  { name: "محاولة 3 (Accept: */*)", headers: { "Accept": "*/*" } },
-  { name: "محاولة 4 (Accept: */*)", headers: { "Accept": "*/*" } },
-  { name: "محاولة 5 (Accept: */*)", headers: { "Accept": "*/*" } },
-  { name: "محاولة 6 (Accept: */*)", headers: { "Accept": "*/*" } }
-];
+const ATTEMPTS = [{ name: "محاولة 1", headers: {} }, { name: "محاولة 2", headers: {} }, { name: "محاولة 3", headers: {} }];
 const out = document.getElementById("out");
 const logBox = document.getElementById("log");
 let lines = [];
@@ -125,22 +119,35 @@ async function findWorkingHeaders() {
   }
   return null;
 }
-async function testRangeOnIndex(v, full) {
-  say("— 2) اختبار Range على index.json (ملف صغير معروف المحتوى)");
-  try {
-    const r = await req(INDEX_URL, Object.assign({}, v.headers, { Range: "bytes=1000-1099" }));
-    say(brief(r), r.status === 206 ? "ok" : "bad");
-    if (r.status !== 206 || r.body.length !== 100) { say("Range لا يعمل بالشكل المتوقع؛ أوقفت الاختبار قبل لمس الحزمة الكبيرة.", "bad"); return false; }
-    const same = hex(r.body) === hex(full.slice(1000, 1100));
-    say(same ? "الجزء المستلم يطابق نفس الموضع من الملف الكامل." : "الجزء المستلم لا يطابق الملف الكامل.", same ? "ok" : "bad");
-    return same;
-  } catch (e) { say("فشل: " + e.message, "bad"); return false; }
+async function testPackHead(v) {
+  say("— 2) books.pack: HEAD مع إعادة المحاولة (الخادم يعيد صفحة في أول زيارة لكل رابط)");
+  for (let i = 1; i <= 4; i++) {
+    try {
+      const r = await req(PACK, v.headers, "HEAD");
+      const ct = hget(r.headers, "content-type");
+      const len = Number(hget(r.headers, "content-length"));
+      const ranges = hget(r.headers, "accept-ranges").toLowerCase().includes("bytes");
+      say("محاولة " + i + ": الرمز " + r.status + " | النوع " + (ct || "؟") + " | الحجم المعلن " + len + " | Accept-Ranges: " + (hget(r.headers, "accept-ranges") || "غير ظاهر") + " | ملفات تعريف الارتباط: " + cookieNames(r.headers));
+      if (!/text\/html/i.test(ct) && len === PACK_SIZE && ranges) {
+        say("حجم الحزمة يطابق الـ Manifest والخادم يعلن دعم Range.", "ok");
+        return true;
+      }
+    } catch (e) { say("محاولة " + i + ": فشل (" + e.message + ")", "bad"); }
+    await sleep(1500);
+  }
+  say("لم يتأكد حجم الحزمة ودعم Range؛ أوقفت الاختبار حتى لا يُنزَّل الملف الكبير.", "bad");
+  return false;
 }
 async function testBook(t, v) {
   say("— كتاب رقم " + t.id + " (المتوقع " + t.length + " بايت)");
   try {
-    const r = await req(PACK, Object.assign({}, v.headers, { Range: "bytes=" + t.offset + "-" + (t.offset + t.length - 1) }));
-    say(brief(r), r.status === 206 ? "ok" : "bad");
+    let r;
+    for (let i = 1; i <= 3; i++) {
+      r = await req(PACK, Object.assign({}, v.headers, { Range: "bytes=" + t.offset + "-" + (t.offset + t.length - 1) }));
+      say("محاولة " + i + ": " + brief(r), r.status === 206 ? "ok" : "warn");
+      if (r.status === 206) break;
+      await sleep(1500);
+    }
     if (r.status !== 206 || r.body.length !== t.length) { say("لم يصل الجزء المطلوب.", "bad"); return false; }
     say("أول 16 بايت: " + hex(r.body.slice(0, 16)) + " | الصيغة: " + magic(r.body));
     const h1 = await sha256(r.body);
@@ -165,7 +172,7 @@ document.getElementById("run").onclick = async (ev) => {
   const found = await findWorkingHeaders();
   if (!found) {
     say("لم تنجح أي محاولة في جلب الملف الحقيقي.", "bad");
-  } else if (await testRangeOnIndex(found.v, found.body)) {
+  } else if (await testPackHead(found.v)) {
     for (const t of TESTS) { if (!(await testBook(t, found.v))) break; }
   }
   say("انتهى الاختبار.");
