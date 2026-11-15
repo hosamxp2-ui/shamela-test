@@ -63,6 +63,25 @@ jobs:
         working-directory: android
         run: ./gradlew assembleDebug
 
+      - name: Verify signing certificate
+        run: |
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          ACTUAL=$("$APKSIGNER" verify --print-certs "$APK" | grep -i "SHA-256 digest" | head -1 | awk '{print $NF}' | tr 'A-F' 'a-f')
+          EXPECTED=$(keytool -list -v -keystore debug.keystore -storepass android 2>/dev/null | grep "SHA256:" | head -1 | awk '{print $NF}' | tr -d ':' | tr 'A-F' 'a-f')
+          echo "APK signing certificate SHA-256:      $ACTUAL"
+          echo "debug.keystore certificate SHA-256:   $EXPECTED"
+          {
+            echo "### Signing certificate (SHA-256)"
+            echo "\`$ACTUAL\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$ACTUAL" ] && [ "$ACTUAL" = "$EXPECTED" ]; then
+            echo "Stable signing key is in use." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::The APK is NOT signed with debug.keystore. Updates will not install over earlier builds."
+            echo "WARNING: APK is NOT signed with debug.keystore." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - uses: actions/upload-artifact@v4
         with:
           name: islamic-library-apk
