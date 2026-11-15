@@ -27,6 +27,9 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Install fonts (optional)
+        run: npm install --no-save @fontsource/amiri @fontsource/noto-naskh-arabic @fontsource/scheherazade-new @fontsource/noto-kufi-arabic || echo "font packages unavailable, continuing without them"
+
       - name: Prepare web folder
         run: |
           rm -rf www
@@ -35,6 +38,13 @@ jobs:
           cp -r src www/src
           cp node_modules/sql.js/dist/sql-wasm.js www/vendor/
           cp node_modules/sql.js/dist/sql-wasm.wasm www/vendor/
+          mkdir -p www/fonts
+          for p in amiri noto-naskh-arabic scheherazade-new noto-kufi-arabic; do
+            for w in 400 700; do
+              f="node_modules/@fontsource/$p/files/$p-arabic-$w-normal.woff2"
+              if [ -f "$f" ]; then cp "$f" www/fonts/; else echo "missing font file: $f"; fi
+            done
+          done
 
       - name: Add Android project
         run: |
