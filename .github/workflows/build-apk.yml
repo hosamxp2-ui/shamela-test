@@ -38,6 +38,7 @@ jobs:
           cp -r src www/src
           cp node_modules/sql.js/dist/sql-wasm.js www/vendor/
           cp node_modules/sql.js/dist/sql-wasm.wasm www/vendor/
+          cp node_modules/fflate/umd/index.js www/vendor/fflate.js || echo "fflate umd file missing; advanced decompression disabled"
           mkdir -p www/fonts
           for p in amiri noto-naskh-arabic scheherazade-new noto-kufi-arabic; do
             for w in 400 700; do
